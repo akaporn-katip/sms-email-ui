@@ -1,0 +1,15 @@
+# Binaries
+/smsmail
+*.exe
+
+# Local reference notes — kept on disk for development only, not distributed.
+/docs/sms-api-spec.md
+
+# Test and coverage output
+*.out
+*.test
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/

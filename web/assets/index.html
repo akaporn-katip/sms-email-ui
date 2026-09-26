@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smsmail — Email & SMS catcher</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <strong>smsmail</strong>
+    <span class="muted">email &amp; sms catcher</span>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="tools">
+    <input id="search" type="search" placeholder="ค้นหา subject, ผู้ส่ง, ข้อความ…" autocomplete="off">
+    <button id="refresh" class="btn" title="Refresh">↻</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="side-group">
+      <div class="side-title">กล่องข้อความ</div>
+      <button class="nav" data-view="email" data-kind="">📧 Email <span class="count" id="count-email">0</span></button>
+      <button class="nav" data-view="sms" data-kind="">💬 SMS ทั้งหมด <span class="count" id="count-sms">0</span></button>
+      <button class="nav" data-view="sms" data-kind="otp">🔑 OTP <span class="count" id="count-otp">0</span></button>
+      <button class="nav" data-view="sms" data-kind="scheduled">⏰ ตั้งเวลา <span class="count" id="count-sched">0</span></button>
+    </div>
+    <div class="side-group">
+      <div class="side-title">การจัดการ</div>
+      <button class="nav danger" id="clear-view">🗑 ล้างกล่องปัจจุบัน</button>
+      <button class="nav danger" id="clear-all">🗑 ล้างทั้งหมด</button>
+    </div>
+    <div class="side-group">
+      <div class="side-title">SMTP / API</div>
+      <div class="hint">
+        SMTP <code id="hint-smtp">:1025</code><br>
+        API <code>/api/v1/</code><br>
+        Bearer <code>sk_…</code>
+      </div>
+    </div>
+  </aside>
+
+  <section class="list" id="list"></section>
+
+  <section class="detail" id="detail">
+    <div class="empty">เลือกข้อความเพื่อดูรายละเอียด</div>
+  </section>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
