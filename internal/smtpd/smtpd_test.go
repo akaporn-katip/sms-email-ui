@@ -241,3 +241,137 @@ func TestSMTPAcceptsAnyCredentials(t *testing.T) {
 		t.Fatalf("captured %d emails, want 1", st.EmailCount())
 	}
 }
+
+// TestParseContentPartShapes pins the contract the web UI relies on: an
+// HTML-only message has an empty Text field and a populated HTML field, and a
+// multipart/alternative message has both.
+func TestParseContentPartShapes(t *testing.T) {
+	lines := func(parts ...string) string {
+		out := ""
+		for _, p := range parts {
+			out += p + "\r\n"
+		}
+		return out
+	}
+	header := []string{"From: a@example.com", "To: b@example.com"}
+
+	cases := []struct {
+		name     string
+		raw      string
+		wantText string
+		wantHTML string
+	}{
+		{
+			name: "html-only",
+			raw: lines(append(header,
+				"Subject: html only",
+				"Content-Type: text/html; charset=UTF-8",
+				"",
+				"<h1>Hello</h1>",
+			)...),
+			wantHTML: "<h1>Hello</h1>",
+		},
+		{
+			name: "html-only without charset",
+			raw: lines(append(header,
+				"Subject: no charset",
+				"Content-Type: text/html",
+				"",
+				"<p>no charset</p>",
+			)...),
+			wantHTML: "<p>no charset</p>",
+		},
+		{
+			name: "quoted-printable html",
+			raw: lines(append(header,
+				"Subject: qp",
+				"Content-Type: text/html; charset=UTF-8",
+				"Content-Transfer-Encoding: quoted-printable",
+				"",
+				"<p>=C3=A9</p>",
+			)...),
+			wantHTML: "<p>é</p>",
+		},
+		{
+			name: "base64 html",
+			raw: lines(append(header,
+				"Subject: b64",
+				"Content-Type: text/html; charset=UTF-8",
+				"Content-Transfer-Encoding: base64",
+				"",
+				"PGgxPmJhc2U2NDwvaDE+",
+			)...),
+			wantHTML: "<h1>base64</h1>",
+		},
+		{
+			name: "text-only",
+			raw: lines(append(header,
+				"Subject: text only",
+				"Content-Type: text/plain; charset=UTF-8",
+				"",
+				"plain hello",
+			)...),
+			wantText: "plain hello",
+		},
+		{
+			name: "multipart alternative",
+			raw: lines(append(header,
+				"Subject: alt",
+				`Content-Type: multipart/alternative; boundary="B"`,
+				"",
+				"--B",
+				"Content-Type: text/plain; charset=UTF-8",
+				"",
+				"text version",
+				"--B",
+				"Content-Type: text/html; charset=UTF-8",
+				"",
+				"<p>html version</p>",
+				"--B--",
+			)...),
+			wantText: "text version",
+			wantHTML: "<p>html version</p>",
+		},
+		{
+			name: "nested related/alternative",
+			raw: lines(append(header,
+				"Subject: related",
+				`Content-Type: multipart/related; boundary="R"`,
+				"",
+				"--R",
+				`Content-Type: multipart/alternative; boundary="A"`,
+				"",
+				"--A",
+				"Content-Type: text/plain; charset=UTF-8",
+				"",
+				"rel text",
+				"--A",
+				"Content-Type: text/html; charset=UTF-8",
+				"",
+				"<p>rel html</p>",
+				"--A--",
+				"--R--",
+			)...),
+			wantText: "rel text",
+			wantHTML: "<p>rel html</p>",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			email := smtpd.Parse([]byte(tc.raw))
+			if !strings.Contains(email.Text, tc.wantText) {
+				t.Errorf("text = %q, want it to contain %q", email.Text, tc.wantText)
+			}
+			if !strings.Contains(email.HTML, tc.wantHTML) {
+				t.Errorf("html = %q, want it to contain %q", email.HTML, tc.wantHTML)
+			}
+			if tc.wantText == "" && strings.TrimSpace(email.Text) != "" {
+				t.Errorf("text = %q, want empty", email.Text)
+			}
+			if tc.wantHTML == "" && strings.TrimSpace(email.HTML) != "" {
+				t.Errorf("html = %q, want empty", email.HTML)
+			}
+		})
+	}
+}

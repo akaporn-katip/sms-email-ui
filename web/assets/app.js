@@ -5,6 +5,7 @@ const state = {
   kind: '',        // '' | 'otp' | 'scheduled'
   query: '',
   selected: null,
+  email: null,     // full message for the open email (list only carries summaries)
   emails: [],
   messages: [],
   stats: null,
@@ -99,7 +100,7 @@ function renderList() {
           <span class="when">${escapeHtml(formatTime(e.date))}</span>
         </div>
         <div class="subject">${escapeHtml(e.subject || '(no subject)')}</div>
-        <div class="preview">${escapeHtml(e.preview || '')}</div>
+        <div class="preview">${e.attachments ? '📎 ' : ''}${escapeHtml(e.preview || '')}</div>
       </div>`).join('');
   } else {
     if (!state.messages.length) {
@@ -129,20 +130,30 @@ function kv(rows) {
 }
 
 function renderEmailDetail(e) {
-  const attachments = (e.attachments || []).map((a, i) => `
+  const attachments = (Array.isArray(e.attachments) ? e.attachments : []).map((a, i) => `
     <div class="attach">
       <span>📎 ${escapeHtml(a.filename || 'attachment')} <span class="muted">${escapeHtml(a.contentType)} · ${formatBytes(a.size)}</span></span>
       <a href="/api/emails/${encodeURIComponent(e.id)}/attachments/${i}">ดาวน์โหลด</a>
     </div>`).join('');
 
+  // Values are escaped here; kv() inserts them verbatim.
   const headers = Object.entries(e.headers || {})
-    .map(([k, v]) => [k, escapeHtml(Array.isArray(v) ? v.join('<br>') : v)]);
+    .map(([k, v]) => [k, (Array.isArray(v) ? v : [v]).map(escapeHtml).join('<br>')]);
+
+  const hasText = Boolean(e.text && e.text.trim());
+  const hasHTML = Boolean(e.html && e.html.trim());
 
   let body;
-  if (e.html && state.htmlTab === 'html') {
+  if (hasHTML && state.htmlTab === 'html') {
     body = `<iframe class="html-body" sandbox srcdoc="${escapeHtml(e.html)}"></iframe>`;
+  } else if (hasText) {
+    body = `<div class="msgbox">${escapeHtml(e.text)}</div>`;
+  } else if (hasHTML) {
+    // Very common: HTML-only mail with no text/plain part.
+    body = `<div class="msgbox empty-body">อีเมลนี้ไม่มี part <code>text/plain</code><br>
+      <button class="btn" id="go-html" style="margin-top:10px">ดูเนื้อหา HTML</button></div>`;
   } else {
-    body = `<div class="msgbox">${escapeHtml(e.text || '(ไม่มีเนื้อหาแบบข้อความ)')}</div>`;
+    body = `<div class="msgbox empty-body">อีเมลนี้ไม่มีเนื้อหา (มีแค่ headers)</div>`;
   }
 
   $('detail').innerHTML = `
@@ -158,8 +169,8 @@ function renderEmailDetail(e) {
       <button class="btn" id="delete-item">ลบ</button>
     </div>
     ${attachments ? `<div style="margin-bottom:14px">${attachments}</div>` : ''}
-    ${e.html ? `<div class="tabs">
-        <button class="tab ${state.htmlTab === 'text' ? 'active' : ''}" data-tab="text">Text</button>
+    ${hasHTML ? `<div class="tabs">
+        <button class="tab ${state.htmlTab === 'text' ? 'active' : ''}" data-tab="text">Text${hasText ? '' : ' (ว่าง)'}</button>
         <button class="tab ${state.htmlTab === 'html' ? 'active' : ''}" data-tab="html">HTML</button>
       </div>` : ''}
     ${body}
@@ -203,10 +214,9 @@ function renderSMSDetail(m) {
 function renderDetail() {
   const detail = $('detail');
   if (state.view === 'email') {
-    const e = state.emails.find((x) => x.id === state.selected);
-    if (!e) { detail.innerHTML = '<div class="empty">เลือกข้อความเพื่อดูรายละเอียด</div>'; return; }
-    renderEmailDetail(e);
-    return;
+    if (!state.selected) { detail.innerHTML = '<div class="empty">เลือกข้อความเพื่อดูรายละเอียด</div>'; return; }
+    if (state.email && state.email.id === state.selected) { renderEmailDetail(state.email); return; }
+    return; // a detail request is in flight
   }
   const m = state.messages.find((x) => x.id === state.selected);
   if (!m) { detail.innerHTML = '<div class="empty">เลือกข้อความเพื่อดูรายละเอียด</div>'; return; }
@@ -234,6 +244,7 @@ async function loadList() {
   }
   if (state.selected && !isSelectedStillPresent()) {
     state.selected = null;
+    state.email = null;
   }
   renderList();
   renderDetail();
@@ -253,19 +264,44 @@ async function refresh() {
   }
 }
 
+// The email list endpoint returns summaries to avoid shipping every body, so
+// the full message is fetched when it is opened.
+async function loadEmailDetail(id) {
+  $('detail').innerHTML = '<div class="empty">กำลังโหลด…</div>';
+  let email;
+  try {
+    email = await api(`/api/emails/${encodeURIComponent(id)}`);
+  } catch (err) {
+    if (state.selected === id) {
+      $('detail').innerHTML = `<div class="empty">โหลดไม่สำเร็จ: ${escapeHtml(err.message)}</div>`;
+    }
+    return;
+  }
+  if (state.selected !== id) return;   // selection moved on while loading
+  state.email = email;
+  // Default to the part that actually has content — HTML-only mail is common.
+  state.htmlTab = email.text && email.text.trim() ? 'text' : (email.html ? 'html' : 'text');
+  renderDetail();
+}
+
 async function selectItem(id) {
   state.selected = id;
+  state.email = null;
   state.htmlTab = 'text';
+  renderList();
+
   if (state.view === 'email') {
-    const e = state.emails.find((x) => x.id === id);
-    if (e && !e.read) {
-      e.read = true;
+    await loadEmailDetail(id);
+    const summary = state.emails.find((x) => x.id === id);
+    if (summary && !summary.read) {
+      summary.read = true;
+      if (state.email) state.email.read = true;
       api(`/api/emails/${encodeURIComponent(id)}/read`, { method: 'POST' })
-        .then(loadStats)
+        .then(() => { renderList(); renderDetail(); loadStats(); })
         .catch(console.error);
     }
+    return;
   }
-  renderList();
   renderDetail();
 }
 
@@ -282,14 +318,23 @@ $('detail').addEventListener('click', async (ev) => {
     const base = state.view === 'email' ? '/api/emails/' : '/api/sms/';
     await api(base + encodeURIComponent(state.selected), { method: 'DELETE' });
     state.selected = null;
+    state.email = null;
     refresh();
     return;
   }
+  if (target.id === 'go-html') {
+    state.htmlTab = 'html';
+    renderDetail();
+    return;
+  }
   if (target.id === 'toggle-read') {
-    const e = state.emails.find((x) => x.id === state.selected);
-    const read = !e.read;
-    await api(`/api/emails/${encodeURIComponent(state.selected)}/read?read=${read}`, { method: 'POST' });
-    e.read = read;
+    const email = state.email;
+    if (!email) return;
+    const read = !email.read;
+    await api(`/api/emails/${encodeURIComponent(email.id)}/read?read=${read}`, { method: 'POST' });
+    email.read = read;
+    const summary = state.emails.find((x) => x.id === email.id);
+    if (summary) summary.read = read;
     renderList();
     renderDetail();
     return;
@@ -305,6 +350,7 @@ for (const el of document.querySelectorAll('.nav[data-view]')) {
     state.view = el.dataset.view;
     state.kind = el.dataset.kind || '';
     state.selected = null;
+    state.email = null;
     refresh();
   });
 }
@@ -326,6 +372,7 @@ $('clear-view').addEventListener('click', async () => {
     await api('/api/sms', { method: 'DELETE' });
   }
   state.selected = null;
+  state.email = null;
   refresh();
 });
 
@@ -335,11 +382,12 @@ $('clear-all').addEventListener('click', async () => {
   await api('/api/sms', { method: 'DELETE' });
   await api('/api/otps', { method: 'DELETE' });
   state.selected = null;
+  state.email = null;
   refresh();
 });
 
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') { state.selected = null; renderList(); renderDetail(); }
+  if (ev.key === 'Escape') { state.selected = null; state.email = null; renderList(); renderDetail(); }
 });
 
 refresh();

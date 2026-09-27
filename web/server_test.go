@@ -260,3 +260,74 @@ func TestMockAPIMountedOnWebPort(t *testing.T) {
 		t.Errorf("sms_remaining = %v", body["sms_remaining"])
 	}
 }
+
+// TestEmailListIsSummariesNotBodies pins the contract the web UI depends on.
+// The list endpoint returns summaries (no body fields) so that opening a
+// message must fetch the detail endpoint; a mismatch between the two shapes
+// previously made the UI render an empty body for every message.
+func TestEmailListIsSummariesNotBodies(t *testing.T) {
+	st, h := newUI(t)
+
+	email := st.AddEmail(&store.Email{
+		From:    "a@example.com",
+		To:      []string{"b@example.com"},
+		Subject: "shape check",
+		Text:    "the text body",
+		HTML:    "<p>the html body</p>",
+		Headers: map[string][]string{"Subject": {"shape check"}},
+	})
+
+	_, list := do(t, h, http.MethodGet, "/api/emails", "")
+	emails, _ := list["emails"].([]any)
+	if len(emails) != 1 {
+		t.Fatalf("emails = %v", list["emails"])
+	}
+	summary := emails[0].(map[string]any)
+
+	for _, absent := range []string{"text", "html", "headers", "raw"} {
+		if _, ok := summary[absent]; ok {
+			t.Errorf("summary must not carry %q, got %v", absent, summary[absent])
+		}
+	}
+	for _, present := range []string{"id", "subject", "preview", "hasHtml", "attachments"} {
+		if _, ok := summary[present]; !ok {
+			t.Errorf("summary is missing %q in %v", present, summary)
+		}
+	}
+	if summary["preview"] != "the text body" {
+		t.Errorf("preview = %v", summary["preview"])
+	}
+
+	_, detail := do(t, h, http.MethodGet, "/api/emails/"+email.ID, "")
+	if detail["text"] != "the text body" || detail["html"] != "<p>the html body</p>" {
+		t.Errorf("detail is missing the body: %v", detail)
+	}
+	if _, ok := detail["headers"]; !ok {
+		t.Errorf("detail is missing headers: %v", detail)
+	}
+}
+
+// TestEmailSummaryHasTextFlagForHtmlOnlyMail covers the default tab decision in
+// the UI: an HTML-only message has hasHtml true and no text preview.
+func TestEmailSummaryHasTextFlagForHtmlOnlyMail(t *testing.T) {
+	st, h := newUI(t)
+
+	st.AddEmail(&store.Email{
+		From:    "a@example.com",
+		To:      []string{"b@example.com"},
+		Subject: "html only",
+		HTML:    "<p>only html here</p>",
+	})
+
+	_, body := do(t, h, http.MethodGet, "/api/emails", "")
+	emails, _ := body["emails"].([]any)
+	summary := emails[0].(map[string]any)
+
+	if summary["hasHtml"] != true {
+		t.Errorf("hasHtml = %v, want true", summary["hasHtml"])
+	}
+	// The preview falls back to the HTML text so the list is still readable.
+	if summary["preview"] != "only html here" {
+		t.Errorf("preview = %v, want the stripped HTML", summary["preview"])
+	}
+}
